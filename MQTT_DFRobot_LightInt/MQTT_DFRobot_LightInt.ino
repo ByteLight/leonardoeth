@@ -1,6 +1,3 @@
-/*
-  UDPSendReceive.pde hello
- */
 
 #include <SPI.h>         // needed for Arduino versions later than 0018
 #include <Ethernet2.h>
@@ -15,61 +12,64 @@
 #define RST    11U    //D11----- Reset
 
 //Relay state
-const int relay =  PD7;// the number of the Relay pin
-int relayState = LOW;    // ledState used to set the LED
+const int relay = 6;       //  the number of the Relay pin
+int relayState = LOW;     // ledState used to set the LED
 
-//Interrupt to detect when LED is switched on/off
-const int interruptPin = 3;
+//Interrupt for light sensor
+const int interruptPin = SDA;
+const int powerPin = 12;
 int intrruptFlag = 0;
+byte testByte = 0x55;
 
 // Enter a MAC address and IP address for your controller below.
 // The IP address will be dependent on your local network:
-#define NODENUMBER  0x67 //last 3 digit of IP address
+
+#define NODENUMBER 250                      //last 3 digit of IP address
+
 #define CLIENTID "client" STR(NODENUMBER)
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
-unsigned int localPort = 8888;      // local port to listen on
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; //buffer to hold incoming packet,
-char ReplyBuffer[] = "acknowledged";       // a string to send back
+unsigned int localPort = 8888;              // local port to listen on
+char packetBuffer[UDP_TX_PACKET_MAX_SIZE];  //buffer to hold incoming packet,
+char ReplyBuffer[] = "acknowledged";        // a string to send backM
 
-IPAddress ip(192, 168, 1, NODENUMBER);     //W5500 client address
-IPAddress server(192, 168, 1, 77);         //MQTT Server address
+IPAddress ip(192, 168, 1, NODENUMBER);      //W5500 client address
+IPAddress server(192, 168, 1, 77);          //MQTT Server address
 IPAddress dns1(192, 168, 1, 1);
 IPAddress subnet(255, 255, 255, 0);
 EthernetClient ethClient;
-PubSubClient client(ethClient);
+PubSubClient mqttClient(ethClient);
 
 EthernetUDP Udp;    //UDP object
 
 
 void callback(char* topic, byte* payload, unsigned int length) 
 {
-  if ((char)payload[0] == '0') {
-    client.publish("ack", STR(NODENUMBER));
-    digitalWrite(relay, LOW);   // Turn the LED on (Note that LOW is the voltage level
-    relayState = LOW;
-  }
-  else if ((char)payload[0] == '1') {
-    client.publish("ack", STR(NODENUMBER));
-    digitalWrite(relay, HIGH);  // Turn the LED off by making the voltage HIGH
-    relayState = HIGH;
+  // b for bytelight, c for casambi
+  if (strcmp(topic,"firmware") == 0 && payload[0] == 98) {
+     mqttClient.publish("bytelight", STR(NODENUMBER));
+    digitalWrite(relay, LOW);   
+    Serial.println(F("bytelight"));
   } 
+    
+  else if (strcmp(topic,"firmware") == 0 && payload[0] == 99) {
+     mqttClient.publish("casambi", STR(NODENUMBER));
+    digitalWrite(relay, HIGH);   
+    Serial.println(F("casambi"));
+  } 
+  
 }
 
 
 void setup() {
   
-  Serial.begin(9600);
-    delay(2500);
+  //Serial port setup
+  Serial.begin(115200);
+  Serial.println("USB Serial OK");
 
-  //while (!Serial){;}
-    Serial.print("After 2500 delay");
+  Serial1.begin(9600);
+  Serial.println("Serial Pin1 OK");
 
-  //Serial1.begin(9600);
-
-  //Interrupt pin setup
-  pinMode(interruptPin, INPUT);  
-  
-  //Setup
+  //W5500 Ethernet setup
   pinMode(SS, OUTPUT);
   pinMode(relay, OUTPUT);
   pinMode(RST, OUTPUT);
@@ -78,18 +78,25 @@ void setup() {
   digitalWrite(RST,LOW); 
   digitalWrite(RST,HIGH);  
   
-  // start the Ethernet and UDP:
+  //Ethernet UDP steup:
   Ethernet.begin(mac, ip, dns1, subnet);
   delay(1500);
-  client.setServer(server,1883);
-  client.setCallback(callback);
   Udp.begin(localPort);
-  
-  Serial.print(ip);
-  Serial.println("End of setup");
-  attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, LOW);
+  Serial.println(ip);
 
-  //Serial1.print(0x55);
+  //MQTT client setup
+  mqttClient.setServer(server,1883);
+  mqttClient.setCallback(callback);
+  Serial.println(F("Setup Complete1"));
+
+  //Light interrupt pin setup
+  pinMode(powerPin, OUTPUT);
+  digitalWrite(powerPin,HIGH);
+  pinMode(interruptPin, INPUT);
+  attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, HIGH);
+ 
+  Serial.println(F("Interrupt setup complete"));
+
 
 }
 
@@ -99,46 +106,43 @@ void pin_ISR() {
 
 void reconnect() 
 {
-  // Loop until we're reconnected
-  while (!client.connected()) {
-    Serial.print(" Attempting MQTT connection...");
+  while (!mqttClient.connected()) {
+    Serial.print(F(" Attempting MQTT connection..."));
     
-    // Attempt to connect
-    if (client.connect(CLIENTID)) {
-      Serial.println("connected");
-      // Once connected, publish an announcement...
-      client.publish("outTopic","Connected!");
+    if (mqttClient.connect(CLIENTID)) {
+      Serial.println(F("connected"));
+      mqttClient.publish("outTopic","Connected!");
       // ... and resubscribe
-      client.subscribe("inTopic");
-    } else {
+      mqttClient.subscribe("firmware");
+    } 
+    else {
       Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 2 seconds");
+      Serial.print(mqttClient.state());
+      Serial.println(F(" try again in 2~3 seconds"));
       // Wait 2 seconds before retrying
-      delay(2000);
+      delay(random(2000,3000));
     }
+    
   }
 }
 
 void loop() {
   
   
-  if (!client.connected()) {
+  if (!mqttClient.connected()) {
     reconnect();
   }
   
   if (1 == intrruptFlag) {
-    Serial.print(" begin pin_ISR()");
-    client.publish("ack", STR(NODENUMBER));
-    digitalWrite(relay, HIGH); 
-    delay(1000);
-    digitalWrite(relay, LOW);
-    Serial.println("end of pin_ISR()");
-    attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, LOW);
     intrruptFlag = 0;
+    mqttClient.publish("lightOn", STR(NODENUMBER));
+    //attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, LOW);
+    Serial.println(F("I see light!"));
+    delay(1000);
+    //Serial1.print(testByte);
   }
   
-  client.loop();  
+  mqttClient.loop();  
   
 }
 
