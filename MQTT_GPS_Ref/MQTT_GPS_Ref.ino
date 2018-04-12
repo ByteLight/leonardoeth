@@ -1,15 +1,8 @@
-
 #include <SPI.h>         // needed for Arduino versions later than 0018
 #include <Ethernet2.h>
 #include <EthernetUdp2.h>         // UDP library from: bjoern@cs.stanford.edu 12/30/2008
 #include <PubSubClient.h>
-
-
-// Enter a MAC address and IP address for your controller below.
-// The IP address will be dependent on your local network:
-#define NODENUMBER 248              //last 3 digit of IP address
-#define CLIENTID "client" STR(NODENUMBER)
-byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
+#include <TinyGPS++.h>
 
 //For W5500 Ethernet
 #define _STR(X)  #X
@@ -17,89 +10,45 @@ byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
 #define SS     10U    //D10----- SS
 #define RST    11U    //D11----- Reset
 
-//Relay state
-const int relay1 = 6;       //  the number of the Relay pin
-const int relay2 = 5;
-const int relay3 = 4;
-const int relay4 = 3;
-
-int relayState = LOW;     // ledState used to set the LED
 
 //Interrupt for light sensor
-const int interruptPin = SDA; // high when no light
-const int powerPin = 12;
+const int interruptPin = 3;
 int intrruptFlag = 0;
+
 byte testByte = 0x55;
 
+// Enter a MAC address and IP address for your controller below.
+// The IP address will be dependent on your local network:
+#define NODENUMBER 103 //last 3 digit of IP address
+#define CLIENTID "client" STR(NODENUMBER)
+byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
+unsigned int localPort = 8888;      // local port to listen on
+char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; //buffer to hold incoming packet,
+char ReplyBuffer[] = "acknowledged";       // a string to send back
 
-unsigned int localPort = 8888;              // local port to listen on
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE];  //buffer to hold incoming packet,
-char ReplyBuffer[] = "acknowledged";        // a string to send backM
-
-IPAddress ip(192, 168, 1, NODENUMBER);      //W5500 client address
-IPAddress server(192, 168, 1, 66);          //MQTT Server address
+IPAddress ip(192, 168, 1, NODENUMBER);     //W5500 client address
+IPAddress server(192, 168, 1, 77);         //MQTT Server address
 IPAddress dns1(192, 168, 1, 1);
 IPAddress subnet(255, 255, 255, 0);
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
 
 EthernetUDP Udp;    //UDP object
+TinyGPSPlus gps;    //gps object
 
-//'n' for normal, 'c' for closed (powered)
-//payload[0] is nth relay [1] for closed or normal.
-//ex. publishing n1 to relay sets relay1 to normal.
 
 void callback(char* topic, byte* payload, unsigned int length) 
 {
-    Serial.println(payload[1]);
-  //Relay 1 
-  if (strcmp(topic,"relay") == 0 && payload [0] == '1' ) {
-    if (payload[1] == 'n') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay1, LOW);   
-    }
-
-    else if (payload[1] == 'c') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay1, HIGH);
-    }
-  }
-  //Relay 2
-  if (strcmp(topic,"relay") == 0 && payload [0] == '2' ) {
-    if (payload[1] == 'n') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay2, LOW);   
-    }
-    else if (payload[1] == 'c') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay2, HIGH);
-    }
-  }
-
-  //Relay 3
-  if (strcmp(topic,"relay") == 0 && payload [0] == '3' ) {
-    if (payload[1] == 'n') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay3, LOW);   
-    }
-    else if (payload[1] == 'c') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay3, HIGH);
-    }
-  }
-
-  //Relay 4
-  if (strcmp(topic,"relay") == 0 && payload [0] == '4' ) {
-    if (payload[1] == 'n') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay4, LOW);   
-    }
-
-    else if (payload[1] == 'c') {
-      mqttClient.publish("relayStatus", STR(NODENUMBER));
-      digitalWrite(relay4, HIGH);
-    }
-  }
+  // b for bytelight, c for casambi
+  if (strcmp(topic,"firmware") == 0 && payload[0] == 98) {
+     mqttClient.publish("bytelight", STR(NODENUMBER));
+    Serial.println("bytelight");
+  } 
+    
+  else if (strcmp(topic,"firmware") == 0 && payload[0] == 99) {
+     mqttClient.publish("casambi", STR(NODENUMBER));
+    Serial.println("casambi");
+  } 
   
 }
 
@@ -108,15 +57,12 @@ void setup() {
   
   //Serial port setup
   Serial.begin(115200);
+  while(!Serial);
   Serial.println("USB Serial OK");
 
   Serial1.begin(9600);
-  Serial.println("Serial Pin1 OK");
-
-  pinMode(relay1, OUTPUT);
-  pinMode(relay2, OUTPUT);
-  pinMode(relay3, OUTPUT);
-  pinMode(relay4, OUTPUT);
+  while(!Serial1);
+  Serial.println("GPS serial OK");
 
   //W5500 Ethernet setup
   pinMode(SS, OUTPUT);
@@ -128,45 +74,40 @@ void setup() {
   
   //Ethernet UDP steup:
   Ethernet.begin(mac, ip, dns1, subnet);
-  delay(1500);
+  delay(1200);
   Udp.begin(localPort);
   Serial.println(ip);
 
   //MQTT client setup
   mqttClient.setServer(server,1883);
   mqttClient.setCallback(callback);
-  Serial.println(F("Setup Complete"));
-
+  
   //Light interrupt pin setup
-  pinMode(powerPin, OUTPUT);
-  digitalWrite(powerPin,HIGH);
-  pinMode(interruptPin, INPUT);
-  attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, FALLING);
- 
-  Serial.println(F("Interrupt setup complete"));
-
+  pinMode(interruptPin, INPUT);  
+  //attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, LOW);
+  
+  Serial.println("Setup Complete");
 }
 
 void pin_ISR() {
-    
   intrruptFlag = 1;
-
 }
 
 void reconnect() 
 {
   while (!mqttClient.connected()) {
-    Serial.print(F(" Attempting MQTT connection..."));
+    Serial.print(" Attempting MQTT connection...");
     
     if (mqttClient.connect(CLIENTID)) {
-      Serial.println(F("connected"));
+      Serial.println("connected");
       mqttClient.publish("outTopic","Connected!");
-      mqttClient.subscribe("relay");
+      // ... and resubscribe
+      mqttClient.subscribe("firmware");
     } 
     else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
-      Serial.println(F(" try again in 2~3 seconds"));
+      Serial.println(" try again in 2~3 seconds");
       // Wait 2 seconds before retrying
       delay(random(2000,3000));
     }
@@ -176,18 +117,88 @@ void reconnect()
 
 void loop() {
   
+  while (Serial1.available() > 0)
+    if (gps.encode(Serial1.read()))
+      displayInfo();
+
+    if (millis() > 5000 && gps.charsProcessed()<10) {
+      Serial.println(F("No GPS detected"));
+      while(true);
+    }
+    
+    
   if (!mqttClient.connected()) {
     reconnect();
   }
- 
+  
   if (1 == intrruptFlag) {
-    mqttClient.publish("lightOn", STR(NODENUMBER));
-    delay(3000);
+    mqttClient.publish("light On", STR(NODENUMBER));
+    
+    //attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, LOW);
     intrruptFlag = 0;
+    Serial.println("I see light!");
+    Serial1.print(testByte);
   }
   
   mqttClient.loop();  
   
+}
+
+void displayInfo()
+{
+  /*
+  Serial.print(F("Location: ")); 
+  if (gps.location.isValid())
+  {
+    Serial.print(gps.location.lat(), 6);
+    Serial.print(F(","));
+    Serial.print(gps.location.lng(), 6);
+  }
+  else
+  {
+    Serial.print(F("INVALID"));
+  }*/
+  
+/*
+  Serial.print(F("  Date/Time: "));
+  if (gps.date.isValid())
+  {
+    Serial.print(gps.date.month());
+    Serial.print(F("/"));
+    Serial.print(gps.date.day());
+    Serial.print(F("/"));
+    Serial.print(gps.date.year());
+  }
+  else
+  {
+    Serial.print(F("INVALID"));
+  }
+  */
+
+  Serial.print(F(" "));
+  if (gps.time.isValid())
+  {
+    /*
+    if (gps.time.hour() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.hour());
+    Serial.print(F(":"));
+    */
+    if (gps.time.minute() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.minute());
+    Serial.print(F(":"));
+    
+    if (gps.time.second() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.second());
+    Serial.print(F("."));
+    if (gps.time.centisecond() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.centisecond());
+  }
+  else
+  {
+    Serial.print(F("INVALID"));
+  }
+
+  Serial.println();
 }
 
   /*
