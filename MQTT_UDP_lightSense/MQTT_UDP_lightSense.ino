@@ -8,7 +8,7 @@
 
 // Enter a MAC address and IP address for your controller below.
 // The IP address will be dependent on your local network:
-#define NODENUMBER 247              //last 3 digit of IP address
+#define NODENUMBER 240              //last 3 digit of IP address
 #define CLIENTID "client" STR(NODENUMBER)
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
 
@@ -33,18 +33,21 @@ int intrruptFlag = 0;
 byte testByte = 0x55;
 
 
-unsigned int localPort = 8888;              // local port to listen on
 char packetBuffer[UDP_TX_PACKET_MAX_SIZE];  //buffer to hold incoming packet,
 char ReplyBuffer[] = "acknowledged";        // a string to send backM
 
 IPAddress ip(192, 168, 1, NODENUMBER);      //W5500 client address
 IPAddress server(192, 168, 1, 66);          //MQTT Server address
+IPAddress UdpServer(192, 168, 1, 230);         //Python server
 IPAddress dns1(192, 168, 1, 1);
 IPAddress subnet(255, 255, 255, 0);
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
 
 EthernetUDP Udp;    //UDP object
+unsigned int destinationPort = 5005;  // the destination port
+unsigned int localPort = 5004;              // local port to listen on
+
 
 //'n' for normal, 'c' for closed (powered)
 //payload[0] is nth relay [1] for closed or normal.
@@ -148,17 +151,16 @@ void setup() {
 
 }
 
+//ISR for light sensing pin. Drops low when light is present.
 void pin_ISR() {
-    
   intrruptFlag = 1;
-
 }
 
 void reconnect() 
 {
   while (!mqttClient.connected()) {
     Serial.print(F(" Attempting MQTT connection..."));
-    
+
     if (mqttClient.connect(CLIENTID)) {
       Serial.println(F("connected"));
       mqttClient.publish("outTopic","Connected!");
@@ -176,27 +178,27 @@ void reconnect()
 }
 
 void loop() {
-    digitalWrite(relay3, HIGH);
-
+  
   if (!mqttClient.connected()) {
     reconnect();
   }
-
- 
-  if (1 == intrruptFlag) {
-        digitalWrite(relay2, LOW);
-
-    mqttClient.publish("lightOn", STR(NODENUMBER));
-        digitalWrite(relay2, HIGH);
-
-    //delay(3000);
+  if (1 == intrruptFlag) { 
+    Udp.beginPacket(UdpServer, destinationPort);
+    Udp.write(STR(NODENUMBER));
+    Udp.endPacket();
+    
+    Udp.beginPacket(UdpServer, destinationPort);
+    Udp.write("241");
+    Udp.endPacket();
+    
+    Udp.beginPacket(UdpServer, destinationPort);
+    Udp.write("242");
+    Udp.endPacket();
+    
+    delay(3000);
     intrruptFlag = 0;
   }
-  
   mqttClient.loop();
-    digitalWrite(relay3, LOW);
-
-  
 }
 
   /*

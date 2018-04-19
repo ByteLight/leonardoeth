@@ -3,12 +3,11 @@
 #include <SPI.h>         // needed for Arduino versions later than 0018
 #include <Ethernet2.h>
 #include <EthernetUdp2.h>         // UDP library from: bjoern@cs.stanford.edu 12/30/2008
-#include <PubSubClient.h>
 
 
 // Enter a MAC address and IP address for your controller below.
 // The IP address will be dependent on your local network:
-#define NODENUMBER 247              //last 3 digit of IP address
+#define NODENUMBER 248              //last 3 digit of IP address
 #define CLIENTID "client" STR(NODENUMBER)
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
 
@@ -17,6 +16,7 @@ byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, NODENUMBER};
 #define STR(X)  _STR(X)
 #define SS     10U    //D10----- SS
 #define RST    11U    //D11----- Reset
+//#define UDP_TX_PACKET_MAX_SIZE 32
 
 //Relay state
 const int relay1 = 6;       //  the number of the Relay pin
@@ -32,24 +32,28 @@ const int powerPin = 12;
 int intrruptFlag = 0;
 byte testByte = 0x55;
 
-
-unsigned int localPort = 8888;              // local port to listen on
+//UDP
 char packetBuffer[UDP_TX_PACKET_MAX_SIZE];  //buffer to hold incoming packet,
 char ReplyBuffer[] = "acknowledged";        // a string to send backM
+int packetsize;
+
 
 IPAddress ip(192, 168, 1, NODENUMBER);      //W5500 client address
-IPAddress server(192, 168, 1, 66);          //MQTT Server address
+IPAddress server(192, 168, 1, 230);         // Server address
 IPAddress dns1(192, 168, 1, 1);
 IPAddress subnet(255, 255, 255, 0);
-EthernetClient ethClient;
-PubSubClient mqttClient(ethClient);
 
 EthernetUDP Udp;    //UDP object
+unsigned int destinationPort = 5005;  // the destination port
+unsigned int localPort = 5004;              // local port to listen on
+
 
 //'n' for normal, 'c' for closed (powered)
 //payload[0] is nth relay [1] for closed or normal.
 //ex. publishing n1 to relay sets relay1 to normal.
 
+
+/*
 void callback(char* topic, byte* payload, unsigned int length) 
 {
     Serial.println(payload[1]);
@@ -103,7 +107,7 @@ void callback(char* topic, byte* payload, unsigned int length)
   }
   
 }
-
+*/
 
 void setup() {
   
@@ -128,15 +132,11 @@ void setup() {
   digitalWrite(RST,HIGH);  
   
   //Ethernet UDP steup:
-  Ethernet.begin(mac, ip, dns1, subnet);
+  Ethernet.begin(mac, ip, dns1, dns1, subnet);
   delay(1500);
   Udp.begin(localPort);
   Serial.println(ip);
 
-  //MQTT client setup
-  mqttClient.setServer(server,1883);
-  mqttClient.setCallback(callback);
-  Serial.println(F("Setup Complete"));
 
   //Light interrupt pin setup
   pinMode(powerPin, OUTPUT);
@@ -145,59 +145,62 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(interruptPin), pin_ISR, FALLING);
  
   Serial.println(F("Interrupt setup complete"));
-
 }
 
 void pin_ISR() {
-    
   intrruptFlag = 1;
-
 }
 
-void reconnect() 
-{
-  while (!mqttClient.connected()) {
-    Serial.print(F(" Attempting MQTT connection..."));
-    
-    if (mqttClient.connect(CLIENTID)) {
-      Serial.println(F("connected"));
-      mqttClient.publish("outTopic","Connected!");
-      mqttClient.subscribe("relay");
-    } 
-    else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(F(" try again in 2~3 seconds"));
-      // Wait 2 seconds before retrying
-      delay(random(2000,3000));
-    }
-    
-  }
-}
 
 void loop() {
-    digitalWrite(relay3, HIGH);
 
-  if (!mqttClient.connected()) {
-    reconnect();
+  if(Udp.parsePacket() == 2)
+  {
+    Udp.read(packetBuffer,UDP_TX_PACKET_MAX_SIZE);
+
+    if (packetBuffer[0] == '1')
+    {
+      if (packetBuffer[1] == 'n')
+        digitalWrite(relay1,LOW);
+      else if (packetBuffer[1] == 'c')
+        digitalWrite(relay1, HIGH);
+    }
+    else if (packetBuffer[0] == '2')
+    {
+      if (packetBuffer[1] == 'n')
+        digitalWrite(relay2,LOW);
+      else if (packetBuffer[1] == 'c')
+        digitalWrite(relay2, HIGH);
+    }
+    else if (packetBuffer[0] == '3')
+    {
+      if (packetBuffer[1] == 'n')
+        digitalWrite(relay3,LOW);
+      else if (packetBuffer[1] == 'c')
+        digitalWrite(relay3, HIGH);
+    }
+    else if (packetBuffer[0] == '4')
+    {
+      if (packetBuffer[1] == 'n')
+        digitalWrite(relay4,LOW);
+      else if (packetBuffer[1] == 'c')
+        digitalWrite(relay4, HIGH);
+    }
   }
 
- 
-  if (1 == intrruptFlag) {
-        digitalWrite(relay2, LOW);
+  if (1 == intrruptFlag){
+    Udp.beginPacket(server, destinationPort);
+    Udp.write(STR(NODENUMBER));
+    Udp.endPacket();
 
-    mqttClient.publish("lightOn", STR(NODENUMBER));
-        digitalWrite(relay2, HIGH);
-
-    //delay(3000);
+  
+    delay(4000);
     intrruptFlag = 0;
   }
-  
-  mqttClient.loop();
-    digitalWrite(relay3, LOW);
 
   
 }
+
 
   /*
   int packetSize = Udp.parsePacket();
@@ -224,52 +227,9 @@ void loop() {
     Serial.println(packetBuffer);
 
     // send a reply, to the IP address and port that sent us the packet we received
-    Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
-    Udp.write(ReplyBuffer);
-    Udp.endPacket();
+    
   }
   delay(10);
   */
-
-
-/*
-  Processing sketch to run with this example
- =====================================================
-
- // Processing UDP example to send and receive string data from Arduino
- // press any key to send the "Hello Arduino" message
-
-
- import hypermedia.net.*;
-
- UDP udp;  // define the UDP object
-
-
- void setup() {
- udp = new UDP( this, 6000 );  // create a new datagram connection on port 6000
- //udp.log( true ); 		// <-- printout the connection activity
- udp.listen( true );           // and wait for incoming message
- }
-
- void draw()
- {
- }
-
- void keyPressed() {
- String ip       = "192.168.1.177";	// the remote IP address
- int port        = 8888;		// the destination port
-
- udp.send("Hello World", ip, port );   // the message to send
-
- }
-
- void receive( byte[] data ) { 			// <-- default handler
- //void receive( byte[] data, String ip, int port ) {	// <-- extended handler
-
- for(int i=0; i < data.length; i++)
- print(char(data[i]));
- println();
- }
- */
 
 
